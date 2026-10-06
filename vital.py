@@ -396,7 +396,7 @@ class Vital(nn.Module):
         self.decoder_2 = Decoder()
         self.norm = nn.LayerNorm(dimension_word)
         self.lm_head = nn.Linear(
-            dimension_word,  # 输入：512 维隐藏向量
+            dimension_word,  # 输入：dimension_word 维隐藏向量
             vocab_size,  # 输出：每个词元各一个分数
             bias=False,
         )
