@@ -1,111 +1,74 @@
-"""用户请求与助手回复语料：训练 BPE，并检查对话文本的编码、解码和保存加载。
+"""先完整分词并缓存选定语料，再进行正文预训练和指令训练。
 
-在 Vital 项目的 Python 环境中运行本文件即可。
-每条语料保存为 (prompt, answer) 元组：第一个元素为用户请求，第二个为参考回答。
-训练 BPE 时，通过 format_dialogue 合成“用户：请求内容\n<assistant>回答内容”。
-其中 <assistant> 是固定编号 259 的特殊词元，不参与 BPE 合并。
-目标行为是根据用户请求给出相应结果，而不只是复述请求或承诺执行。
-本脚本训练对象仍是分词器；测试结果表示对话文字能否完整还原。
-训练语言模型时，将用户请求作为上下文，以助手回复作为预测目标；
-可屏蔽用户部分的损失，对助手回复及末尾 EOS 计算下一词元预测损失。
+training_set/pretrain.jsonl：每行一个 {"text": "正文"}。
+training_set/instruction.jsonl：每行一个 {"prompt": "请求", "answer": "回答"}。
+正文阶段还会流式读取 FineWeb-Edu 的 text 字段，与本地正文共用下一词元训练流程。
+指令阶段还会流式读取 BELLE 的 instruction/output，忽略远程数据的 input 字段。
+两阶段共用 tokenizer.json。正文对所有后续词元计算损失，指令只对回答及 EOS 计算损失。
+测试请求不参与词表或模型训练；生成时仅传入请求和模型自己的预测。
 
-分词器用法：
-    tokenizer = train_tokenizer()
-    prompt, answer = TRAIN_TEXTS[0]
-    text = format_dialogue(prompt, answer)
-    token_ids = tokenizer.encode(text, add_bos=True, add_eos=True)
-    restored_text = tokenizer.decode(token_ids[1:-1], skip_special_tokens=False, errors="strict")
-
-输出保存位置：
-    encode 返回的是整数编号列表，保存在调用处的 token_ids 等变量中。
-    本脚本没有将每条语料的词元编号写入文件，也没有生成嵌入向量。
-    运行 main 后，词表和合并规则保存到本脚本同目录的 demo_tokenizer.json。
-    该 JSON 是分词器配置，不包含每条语料的编号列表或神经网络嵌入向量。
+示例：.venv/Scripts/python.exe train.py --batch-size 4 --max-seq-len 256
+轮数由下方文件参数或命令行指定；--max-batches 可限制每阶段每轮的批次数。
+--mixed-precision 选择混合精度；--length-bucket-batches 控制按 token 长度组批的缓冲大小。
+--usejsononly 只使用本地 JSONL，词表构建和两个训练阶段均不加载远程数据。
 """
 
 from __future__ import annotations
 
+import argparse
+import json
+from datetime import datetime
+from itertools import islice
 from pathlib import Path
-
 import torch
 from torch import nn
 
 import vital
 from vital import Vital
+from parts.tokenizer import RuleTokenizer
+from parts.training_data import (
+    IGNORE_INDEX, STAGE_FILES, encode_prompt, make_loader, read_records, tokenizer_texts,
+)
 
 
-# TRAIN_TEXTS：训练集，每条样例为 (prompt, answer)，两个元素都是字符串。
-# prompt 说明任务，answer 给出实际结果，存储时不包含角色前缀。
-# BPE 只接收字符串，因此训练前通过 format_dialogue 格式化每个元组。
-TRAIN_TEXTS: list[tuple[str, str]] = [
-    (
-        "用一句话向我打招呼，并询问我需要什么帮助。",
-        "你好！你希望我帮你完成什么事情？",
-    ),
-    (
-        "请用一句话解释分词器的作用。",
-        "分词器把文字转换成词元编号，让模型能够处理这些文字。",
-    ),
-    (
-        "请解释 PAD 词元的作用。",
-        "PAD 是补齐长度的占位词元，让同一批次中的不同长度序列能够组成矩形张量。",
-    ),
-    ("请把 I enjoy learning mathematics. 翻译成中文。", "我喜欢学习数学。"),
-    ("请把“今天的天气很好。”翻译成英文。", "The weather is nice today."),
-    (
-        "请把“由于时间方面的原因，我们决定将会议安排推迟到明天。”改写得简洁一些。",
-        "时间有限，会议推迟到明天。",
-    ),
-    (
-        "请用一句话总结：小林每天练习 Python，遇到错误就查阅文档，一个月后能够独立编写小程序。",
-        "小林通过持续练习和查阅文档，逐渐掌握了独立编写 Python 小程序的能力。",
-    ),
-    ("请计算 37 加 58，只输出结果。", "95"),
-    (
-        "请解方程 2x + 6 = 18，并说明步骤。",
-        "两边减去 6，得到 2x = 12；再将两边除以 2，得到 x = 6。",
-    ),
-    (
-        "请写一个 Python 函数，返回两个数中较大的那个。",
-        "```python\ndef larger(a, b):\n    return max(a, b)\n```",
-    ),
-    (
-        "请用 Python 列表推导式生成 1 到 5 的平方，只输出代码。",
-        "```python\nsquares = [n * n for n in range(1, 6)]\n```",
-    ),
-    (
-        "请把“阅读教材、完成练习、复习错题”整理成编号列表。",
-        "1. 阅读教材\n2. 完成练习\n3. 复习错题",
-    ),
-    (
-        "请从“姓名：李明；年龄：20；专业：数学”中提取信息，只输出 JSON。",
-        '{"姓名": "李明", "年龄": 20, "专业": "数学"}',
-    ),
-    ("请修正这句话的语病：我昨天去了图书馆，并阅读书籍了。", "我昨天去图书馆看书了。"),
-    (
-        "请写一封简短的中文邮件，向老师询问作业截止时间。",
-        "老师您好：\n请问本次作业的截止时间是什么时候？感谢您的帮助。\n祝好！",
-    ),
-    (
-        "请制定一个总时长为 30 分钟的数学复习计划。",
-        "前 10 分钟复习定义和公式，中间 15 分钟完成练习，最后 5 分钟整理错题。",
-    ),
-    (
-        "请说明 Python 列表和元组在修改元素方面的区别。",
-        "列表可以增删或替换元素；元组创建后不能增删或替换其中的元素。",
-    ),
-    (
-        "请解释什么是平均数，并用 2、4、6 举例。",
-        "平均数是所有数的总和除以数的个数。2、4、6 的平均数是 (2 + 4 + 6) / 3 = 4。",
-    ),
-    ("请把“赶快把文件发给我。”改写得礼貌一些。", "方便的话，请把文件发给我，谢谢。"),
-    ("请写一句包含猫和狗的简短故事。", "小猫迷路时，一只热心的小狗陪它找到了回家的路。"),
-    ("你是什么模型？", "我是Vital模型。"),
-]
+DATA_DIR = Path(__file__).resolve().parent / "training_set"
+TOKENIZER_PATH = Path(__file__).resolve().with_name("tokenizer.json")
+OUTPUT_DIR = Path(__file__).resolve().parent / "checkpoints" / "latest"
+INSTRUCTION_DATASET = "BelleGroup/train_1M_CN"
+PRETRAIN_DATASET = "HuggingFaceFW/fineweb-edu"
+# default 使用全量正文；也可选 sample-10BT 等官方子集。数据始终按需流式读取。
+PRETRAIN_DATASET_CONFIG = "default"
+# 首次训练的外接语料范围：按原始文档数划分，先截取、再分词和洗牌。
+# 每轮重复训练这一首段；本地 JSONL 不受这些上限影响。
+PRETRAIN_FIRST_PART_DOCUMENTS = 400_000
+INSTRUCTION_FIRST_PART_DOCUMENTS = 300_000
+# 供其他脚本导入；仅描述计划范围，不是自动记录的实际训练进度。
+# dataset/config 用于 load_dataset，start_document 用于 dataset.skip(...)。
+# 后续训练须复用同一数据集版本、划分值，以及已保存的权重和分词器。
+PRETRAIN_REMAINING_DATA = {
+    "dataset": PRETRAIN_DATASET,
+    "config": PRETRAIN_DATASET_CONFIG,
+    "start_document": PRETRAIN_FIRST_PART_DOCUMENTS,
+}
+INSTRUCTION_REMAINING_DATA = {
+    "dataset": INSTRUCTION_DATASET,
+    "config": None,
+    "start_document": INSTRUCTION_FIRST_PART_DOCUMENTS,
+}
+BATCH_SIZE = 4
+MAX_SEQ_LEN = 512
+# 混合精度：auto 在 CUDA 上优先用 BF16，否则用 FP16；CPU 自动保持 FP32。
+# 也可明确设为 "off"、"bf16" 或 "fp16"；模型参数本身仍保留 FP32。
+MIXED_PRECISION = "auto"
+# 每次缓存多少个批次的样本来按 token 长度分组；0 关闭，64 表示最多缓存 64 * BATCH_SIZE 条。
+LENGTH_BUCKET_BATCHES = 64
+PRETRAIN_EPOCHS = 1000
+INSTRUCTION_EPOCHS = 1000
+lr = 3e-3
+minimum_lr = 2e-5
+weight_decay = 1e-3
 
-# TEST_TEXTS：独立测试集，不参与学习词表或合并规则。
-# 同样使用 (prompt, answer) 元组，但请求与训练集不同。
-# 这些文本当前用于分词器检查；评估模型回复时，只输入“用户：...\n<assistant>”。
+# 独立验证集，只用于分词器还原检查和训练后的生成评估。
 TEST_TEXTS: list[tuple[str, str]] = [
     (
         "请用一句话解释嵌入层的作用。",
@@ -141,17 +104,6 @@ def format_dialogue(prompt: str, answer: str) -> str:
     return f"用户：{prompt}\n{vital.BPETokenizer.ASSISTANT_TOKEN}{answer}"
 
 
-def train_tokenizer() -> vital.BPETokenizer:
-    """只使用 TRAIN_TEXTS 训练分词器，并设置默认分词器。"""
-    # tokenizer：训练后的分词器对象。
-    # vocab_size 是包含特殊词元的词表上限；min_frequency 是最低出现次数。
-    texts = [format_dialogue(prompt, answer) for prompt, answer in TRAIN_TEXTS]
-    tokenizer = vital.train_bpe(texts, vocab_size=51200, min_frequency=2)
-    print(f"训练集：{len(TRAIN_TEXTS)} 条；测试集：{len(TEST_TEXTS)} 条")
-    print(f"实际词表：{tokenizer.vocab_size} 个词元；合并规则：{len(tokenizer.merges)} 条")
-    return tokenizer
-
-
 def test_tokenizer(tokenizer: vital.BPETokenizer) -> None:
     """验证每条测试文本经过编码、解码后仍与原文完全一致。"""
     # prompt：用户请求；answer：参考回答；text：用于分词器检查的完整对话。
@@ -184,9 +136,7 @@ def texts_to_tensor(
     add_eos: bool,
 ) -> torch.Tensor:
     """把一批文字编成补齐后的词元编号张量，形状为 [样本数, 序列长度]。"""
-    sequences = [
-        tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos) for text in texts
-    ]
+    sequences = tokenizer.encode_batch(texts, add_bos=add_bos, add_eos=add_eos)
     width = max(len(sequence) for sequence in sequences)
     padded = [
         sequence + [tokenizer.pad_token_id] * (width - len(sequence))
@@ -195,141 +145,329 @@ def texts_to_tensor(
     return torch.tensor(padded, dtype=torch.long, device=device)
 
 
-EPOCH = 500
-lr = 1e-3
-minimum_lr = 1e-5
-weight_decay = 1e-3
+def save_model(model: nn.Module, tokenizer: vital.BPETokenizer, output_dir: Path) -> None:
+    """保存所有模型参数、持久缓冲区，以及与当前权重配套的完整分词器。"""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), output_dir / "model.pt")
+    tokenizer.save(output_dir / "tokenizer.json")
+    print(f"模型权重已保存到：{output_dir / 'model.pt'}")
+    print(f"配套分词器已保存到：{output_dir / 'tokenizer.json'}")
 
-def main() -> None:
-    # 检查请求没有同时出现在训练集和测试集中，即使参考回答不同也不允许重复。
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_prompts = {prompt for prompt, _ in TRAIN_TEXTS}
-    train_labels = {label for _, label in TRAIN_TEXTS}
-    test_labels = {label for _, label in TEST_TEXTS}
-    test_prompts = {prompt for prompt, _ in TEST_TEXTS}
-    if train_prompts & test_prompts:
-        raise ValueError("训练集和测试集包含重复请求")
 
-    tokenizer = train_tokenizer()
-    test_tokenizer(tokenizer)
-
-    # output_path：输出文件，固定保存在本脚本所在目录。
-    output_path = Path(__file__).resolve().with_name("demo_tokenizer.json")
-    tokenizer.save(output_path)
-
-    # loaded_tokenizer：从文件加载的分词器，同时设置为默认分词器。
-    loaded_tokenizer = vital.load_bpe(output_path)
-    for prompt, answer in TEST_TEXTS:
-        text = format_dialogue(prompt, answer)
-        if loaded_tokenizer.encode(text) != tokenizer.encode(text):
-            raise AssertionError("保存加载后，词元编号发生了变化")
-
-    print("保存与加载检查：通过")
-    print(f"分词器已保存到：{output_path}")
-
-    model = Vital(loaded_tokenizer.vocab_size).to(device)
-    criterion = nn.CrossEntropyLoss(ignore_index=loaded_tokenizer.pad_token_id)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=EPOCH, eta_min=minimum_lr
+def save_train_result(
+    records: list[dict[str, str]],
+    trained_at: str,
+    parameter_count: int,
+) -> None:
+    """把本次验证集结果追加到 audit/validation.json，保留已有训练记录。"""
+    output_dir = Path(__file__).resolve().parent / "audit"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "validation.json"
+    history: list[dict[str, object]] = []
+    if output_path.exists():
+        loaded = json.loads(output_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, list):
+            history = loaded
+    # 旧文件是扁平的验证样本列表，先收成一条历史记录再追加。
+    if history and isinstance(history[0], dict) and "请求" in history[0]:
+        previous_time = datetime.fromtimestamp(output_path.stat().st_mtime).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        history = [{"训练时间": previous_time, "验证集": history}]
+    history.append(
+        {"训练时间": trained_at, "总参数量": parameter_count, "验证集": records}
     )
-
-    # 按 TRAIN_TEXTS / TEST_TEXTS 的原顺序编码，保证每一行的请求和回答仍然成对。
-    # 请求以 BOS 开头、助手标记结尾；回答以 EOS 结尾。较短序列用 PAD 补齐。
-    train_prompts = texts_to_tensor(
-        [format_dialogue(prompt, "") for prompt, _ in TRAIN_TEXTS],
-        loaded_tokenizer,
-        device,
-        add_bos=True,
-        add_eos=False,
+    output_path.write_text(
+        json.dumps(history, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
-    train_labels = texts_to_tensor(
-        [label for _, label in TRAIN_TEXTS],
-        loaded_tokenizer,
-        device,
-        add_bos=False,
-        add_eos=True,
-    )
-    test_prompts = texts_to_tensor(
-        [format_dialogue(prompt, "") for prompt, _ in TEST_TEXTS],
-        loaded_tokenizer,
-        device,
-        add_bos=True,
-        add_eos=False,
-    )
-    test_labels = texts_to_tensor(
-        [label for _, label in TEST_TEXTS],
-        loaded_tokenizer,
-        device,
-        add_bos=False,
-        add_eos=True,
-    )
+    print(f"验证集结果已追加到：{output_path}")
 
-    # 保留初始编号张量；逐词元训练只修改当前请求和剩余回答。
-    initial_train_prompts = train_prompts.clone()
-    initial_train_labels = train_labels.clone()
 
-    for epoch in range(EPOCH):
-        if train_labels.size(1) == 0:
-            train_prompts = initial_train_prompts.clone()
-            train_labels = initial_train_labels.clone()
+def train_tokenizer(*, retrain: bool = False, data_dir: Path | None = None,
+                    mode: str = "auto", texts=None) -> vital.BPETokenizer:
+    """复用固定词表；新词表默认按规则收集，auto 仍兼容已有 BPE。"""
+    if mode not in ("auto", "rules", "bpe"):
+        raise ValueError("分词模式必须是 auto、rules 或 bpe")
+    if TOKENIZER_PATH.exists() and not retrain:
+        tokenizer = vital.load_bpe(TOKENIZER_PATH)
+        actual_mode = "rules" if isinstance(tokenizer, RuleTokenizer) else "bpe"
+        if mode != "auto" and mode != actual_mode:
+            raise ValueError("已有词表的模式不匹配；请用 --tokenizer 指定新路径，"
+                             "或明确传入 --retrain-tokenizer 重建并从头训练模型")
+        print(f"复用分词器：{TOKENIZER_PATH}；实际词表：{tokenizer.vocab_size}")
+        return tokenizer
+    source = texts if texts is not None else tokenizer_texts(data_dir or DATA_DIR)
+    if mode == "bpe":
+        tokenizer = vital.train_bpe(source, vocab_size=16384)
+    else:
+        tokenizer = RuleTokenizer().train(source, show_progress=True)
+    tokenizer.save(TOKENIZER_PATH)
+    print(f"词表已保存：{TOKENIZER_PATH}；实际词表：{tokenizer.vocab_size}")
+    return tokenizer
 
-        # 本轮只预测剩余回答的第一个词元，标签形状为 [样本数]。
-        next_labels = train_labels[:, 0].clone()
-        optimizer.zero_grad()
-        loss = criterion(model(train_prompts, last_token_only=True), next_labels)
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
 
-        # 训练完成后，将正确词元放到各请求的有效末尾，再移除回答首列。teacher forcing
-        # 已结束样本的下一标签是 PAD，不追加，也不参与损失。
-        active = next_labels != loaded_tokenizer.pad_token_id
-        prompt_lengths = (train_prompts != loaded_tokenizer.pad_token_id).sum(dim=1)
-        if (prompt_lengths[active] == train_prompts.size(1)).any():
-            padding_column = torch.full(
-                (train_prompts.size(0), 1),
-                loaded_tokenizer.pad_token_id,
-                dtype=train_prompts.dtype,
-                device=device,
-            )
-            train_prompts = torch.cat((train_prompts, padding_column), dim=1)
-        rows = torch.arange(train_prompts.size(0), device=device)[active]
-        train_prompts[rows, prompt_lengths[active]] = next_labels[active]
-        train_labels = train_labels[:, 1:]
+def validate_training_data(data_dir: Path) -> dict[str, int]:
+    """流式检查记录格式、非空语料和验证请求泄漏，只保留计数。"""
+    forbidden = {prompt for prompt, _ in TEST_TEXTS}
+    counts = {}
+    for stage, filename in STAGE_FILES.items():
+        count = 0
+        for row in read_records(data_dir / filename, stage):
+            if stage == "instruction" and row["prompt"] in forbidden:
+                raise ValueError(f"指令训练集包含验证请求：{row['prompt']}")
+            count += 1
+        if count == 0:
+            raise ValueError(f"训练文件没有有效记录：{data_dir / filename}")
+        counts[stage] = count
+    return counts
 
-        if (epoch + 1) % 10 == 0:
-            print(f'epoch:{epoch + 1}, loss:{loss.item():.4f}')
 
+def resolve_mixed_precision(device: torch.device, mode: str) -> str:
+    """解析实际精度；显式请求不支持的模式时立即报错，避免静默切换。"""
+    if mode not in ("auto", "off", "bf16", "fp16"):
+        raise ValueError("混合精度必须是 auto、off、bf16 或 fp16")
+    if mode == "off":
+        return mode
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            raise ValueError("当前环境没有可用的 CUDA 设备")
+        with torch.cuda.device(device):
+            supports_bf16 = torch.cuda.is_bf16_supported()
+        if mode == "auto":
+            return "bf16" if supports_bf16 else "fp16"
+        if mode == "bf16" and not supports_bf16:
+            raise ValueError("当前 CUDA 设备不支持 BF16，请使用 fp16 或 off")
+        return mode
+    if device.type == "cpu":
+        if mode == "fp16":
+            raise ValueError("本训练脚本的 FP16 模式需要 CUDA；CPU 请使用 off 或 bf16")
+        return "off" if mode == "auto" else mode
+    raise ValueError(f"暂不支持在 {device.type} 设备上使用混合精度")
+
+
+def train_epoch(
+    model: nn.Module, loader, optimizer, device: torch.device, *,
+    max_batches: int | None = None, log_interval: int = 10,
+    mixed_precision: str = "off", scaler: torch.amp.GradScaler | None = None,
+) -> dict[str, float | int]:
+    """一轮只搬运当前批次到设备，一次计算批次内所有有效位置的损失。"""
+    if max_batches is not None and max_batches < 1:
+        raise ValueError("max_batches 必须至少为 1")
+    model.train()
+    precision = resolve_mixed_precision(device, mixed_precision)
+    amp_dtype = torch.bfloat16 if precision == "bf16" else torch.float16
+    # FP16 的梯度范围较小，使用动态损失缩放；BF16/FP32 不需要缩放。
+    # main 会跨 epoch 复用 scaler，避免每轮重置已学习的缩放比例。
+    if scaler is None:
+        scaler = torch.amp.GradScaler(device.type, enabled=precision == "fp16")
+    criterion = nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
+    batches = islice(loader, max_batches) if max_batches is not None else loader
+    total_tokens, steps = 0, 0
+    # 累计统计留在训练设备上；FP64 对应原先 Python float 的累计精度。
+    # 只在打印或返回时读取，避免每批 loss.item() 强制 CPU 等待 GPU。
+    total_loss = torch.zeros((), device=device, dtype=torch.float64)
+    for batch in batches:
+        valid_tokens = int((batch["labels"] != IGNORE_INDEX).sum().item())
+        if valid_tokens == 0:
+            raise ValueError("当前批次没有可训练的目标词元")
+        # input_ids、labels：[B, T]，B <= batch_size，T <= max_seq_len。
+        input_ids = batch["input_ids"].to(device)
+        labels = batch["labels"].to(device)
+        optimizer.zero_grad(set_to_none=True)
+        # autocast 只包住前向和损失：矩阵运算使用选定精度，交叉熵自动保留 FP32。
+        # input_ids/labels 仍为整数；logits：[B, T, V]，V 是实际词表大小。
+        with torch.autocast(device_type=device.type, dtype=amp_dtype,
+                            enabled=precision != "off"):
+            logits = model(input_ids, last_token_only=False)
+            loss = criterion(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
+        if not torch.isfinite(loss):
+            raise RuntimeError("训练损失不是有限数值，请检查数据和学习率")
+        # 反向传播在 autocast 外执行；关闭缩放时以下调用等价于原来的 backward/step。
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        steps += 1
+        total_tokens += valid_tokens
+        total_loss.add_(loss.detach().to(torch.float64), alpha=valid_tokens)
+        if log_interval > 0 and steps % log_interval == 0:
+            average_loss = total_loss.item() / total_tokens
+            print(f"批次：{steps}；有效目标：{total_tokens}；平均损失：{average_loss:.4f}")
+    if steps == 0:
+        raise ValueError("本轮没有产生训练批次")
+    return {"steps": steps, "tokens": total_tokens, "loss": total_loss.item() / total_tokens}
+
+
+def evaluate_replies(model, tokenizer, device, max_seq_len, max_new_tokens):
+    """参考答案只用于记录；生成输入只包含请求和模型自己的预测。"""
     model.eval()
-    with torch.no_grad():
-        max_new_tokens = 128
-        print("\n模型回复测试：")
-        for sample_number, (prompt, answer) in enumerate(TEST_TEXTS, start=1):
-            prompt_ids = test_prompts[sample_number - 1]
-            input_ids = prompt_ids[
-                prompt_ids != loaded_tokenizer.pad_token_id
-            ].unsqueeze(0)
-            generated_ids: list[int] = []
+    records = []
+    with torch.inference_mode():
+        for number, (prompt, answer) in enumerate(TEST_TEXTS, start=1):
+            input_ids = torch.tensor([encode_prompt(tokenizer, prompt)],
+                                     dtype=torch.long, device=device)
+            generated_ids = []
             stopped_at_eos = False
-
-            # 只接入模型预测的编号；参考回答仅用于最后显示。
             for _ in range(max_new_tokens):
-                result = model(input_ids, last_token_only=True)
-                next_ids = result.argmax(dim=-1)
-                next_id = next_ids.item()
-                if next_id == loaded_tokenizer.eos_token_id:
+                result = model(input_ids[:, -max_seq_len:], last_token_only=True)
+                # 这些控制词元不会作为正文/回答目标，生成时也不应输出。
+                result[:, [tokenizer.pad_token_id, tokenizer.bos_token_id,
+                           tokenizer.assistant_token_id]] = float("-inf")
+                next_id = result.argmax(dim=-1).item()
+                if next_id == tokenizer.eos_token_id:
                     stopped_at_eos = True
                     break
                 generated_ids.append(next_id)
-                input_ids = torch.cat((input_ids, next_ids.unsqueeze(1)), dim=1)
+                next_tensor = torch.tensor([[next_id]], dtype=torch.long, device=device)
+                input_ids = torch.cat((input_ids[:, -max_seq_len:], next_tensor), dim=1)
+            reply = tokenizer.decode(generated_ids)
+            reason = "EOS" if stopped_at_eos else f"达到 {max_new_tokens} 个词元上限"
+            print(f"\n测试 {number}：{prompt}\n模型回答：{reply}\n参考回答：{answer}\n结束原因：{reason}")
+            records.append({"请求": prompt, "模型回答": reply, "参考回答": answer, "结束原因": reason})
+    return records
 
-            reply = loaded_tokenizer.decode(generated_ids)
-            stop_reason = "EOS" if stopped_at_eos else f"达到 {max_new_tokens} 个词元上限"
-            print(f"\n测试 {sample_number}：{prompt}")
-            print(f"模型回答：{reply}")
-            print(f"参考回答：{answer}")
-            print(f"结束原因：{stop_reason}")
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="正文预训练 → 指令训练，流式小批次加载")
+    parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
+    parser.add_argument("--usejsononly", action="store_true",
+                        help="只使用 --data-dir 下的本地 JSONL；不加载远程正文或指令数据")
+    parser.add_argument("--tokenizer", type=Path, default=TOKENIZER_PATH)
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR,
+                        help="训练完成后保存 model.pt 和 tokenizer.json 的目录；同名文件会覆盖")
+    parser.add_argument("--retrain-tokenizer", action="store_true", help="明确重训词表；本脚本从头训练模型")
+    parser.add_argument("--tokenizer-mode", choices=("auto", "rules", "bpe"), default="auto",
+                        help="auto 复用现有格式，新建时使用 rules；rules 为汉字逐字/单词分隔，无词表数量上限")
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--max-seq-len", type=int, default=MAX_SEQ_LEN)
+    parser.add_argument("--mixed-precision", choices=("auto", "off", "bf16", "fp16"),
+                        default=MIXED_PRECISION, help="自动混合精度；off 保持 FP32")
+    parser.add_argument("--length-bucket-batches", type=int, default=LENGTH_BUCKET_BATCHES,
+                        help="每次按长度分组的批次数；0 关闭，批次之间仍随机打乱")
+    parser.add_argument("--pretrain-epochs", type=int, default=PRETRAIN_EPOCHS)
+    parser.add_argument("--instruction-epochs", type=int, default=INSTRUCTION_EPOCHS)
+    parser.add_argument("--shuffle-buffer", type=int, default=256)
+    parser.add_argument("--max-batches", type=int, help="每阶段每轮最多训练几个批次，用于快速检查")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--skip-validation", action="store_true", help="跳过最后的回复生成检查")
+    args = parser.parse_args(argv)
+    if min(args.batch_size, args.max_seq_len, args.shuffle_buffer, args.max_new_tokens) < 1:
+        parser.error("批次、序列、缓冲区及生成长度必须为正整数")
+    if min(args.pretrain_epochs, args.instruction_epochs) < 0:
+        parser.error("训练轮数不能为负数")
+    if args.length_bucket_batches < 0:
+        parser.error("长度分组缓冲批次数不能为负数")
+    if args.pretrain_epochs + args.instruction_epochs == 0:
+        parser.error("至少启用一个训练阶段")
+    if args.max_batches is not None and args.max_batches < 1:
+        parser.error("--max-batches 必须至少为 1")
+    if any(args.tokenizer.resolve() == (args.data_dir / filename).resolve()
+           for filename in STAGE_FILES.values()):
+        parser.error("分词器输出不能覆盖训练语料")
+    return args
+
+
+def main(argv=None) -> None:
+    global TOKENIZER_PATH
+    args = parse_args(argv)
+    TOKENIZER_PATH = args.tokenizer
+    counts = validate_training_data(args.data_dir)
+    # 使用本次运行的局部配置，不修改全局数据源，避免影响后续调用。
+    pretrain_dataset = None if args.usejsononly else PRETRAIN_DATASET
+    instruction_dataset = None if args.usejsononly else INSTRUCTION_DATASET
+    device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available()
+                          else "cpu" if args.device == "auto" else args.device)
+    precision = resolve_mixed_precision(device, args.mixed_precision)
+    scaler = torch.amp.GradScaler(device.type, enabled=precision == "fp16")
+    torch.manual_seed(args.seed)
+    print(f"设备：{device}；本地正文：{counts['pretrain']} 条；本地指令：{counts['instruction']} 条")
+    if args.usejsononly:
+        print("数据来源：仅本地 JSONL（不加载远程数据，建词表也只使用本地数据）")
+    if args.pretrain_epochs > 0 and pretrain_dataset is not None:
+        print(f"额外正文数据：{pretrain_dataset}（{PRETRAIN_DATASET_CONFIG}），只读取 text")
+        print(f"本次范围：前 {PRETRAIN_FIRST_PART_DOCUMENTS} 篇原始文档；其余范围见 PRETRAIN_REMAINING_DATA")
+    if args.instruction_epochs > 0 and instruction_dataset is not None:
+        print(f"额外指令数据：{instruction_dataset}，只读取 instruction 和 output")
+        print(f"本次范围：前 {INSTRUCTION_FIRST_PART_DOCUMENTS} 篇原始文档；其余范围见 INSTRUCTION_REMAINING_DATA")
+    if args.max_batches is not None and (pretrain_dataset is not None or instruction_dataset is not None):
+        print("注意：--max-batches 可能提前结束首段；剩余范围变量不会随实际进度自动更新。")
+    print(f"每批最多 {args.batch_size} 条序列；每条最多 {args.max_seq_len} 个输入词元")
+    print(f"训练精度：{'FP32' if precision == 'off' else precision.upper()}；"
+          f"长度分组缓冲：{args.length_bucket_batches} 个批次（0 表示关闭）")
+    stages = (("pretrain", "正文预训练", args.pretrain_epochs),
+              ("instruction", "指令训练", args.instruction_epochs))
+    loaders = {}
+    for stage, name, epochs in stages:
+        if epochs == 0:
+            continue
+        # 每个阶段只创建一次数据流；后续轮次重新迭代，不重复调用 load_dataset。
+        loader = make_loader(args.data_dir / STAGE_FILES[stage], stage, vital.BPETokenizer(),
+                             batch_size=args.batch_size, max_seq_len=args.max_seq_len,
+                             shuffle_buffer=args.shuffle_buffer,
+                             length_bucket_batches=args.length_bucket_batches,
+                             pretrain_dataset=pretrain_dataset if stage == "pretrain" else None,
+                             pretrain_config=PRETRAIN_DATASET_CONFIG if stage == "pretrain" else None,
+                             instruction_dataset=instruction_dataset if stage == "instruction" else None,
+                             remote_document_limit=(PRETRAIN_FIRST_PART_DOCUMENTS if stage == "pretrain"
+                                                    else INSTRUCTION_FIRST_PART_DOCUMENTS),
+                             excluded_prompts={prompt for prompt, _ in TEST_TEXTS})
+        loaders[stage] = loader
+
+    # 首次建表扫描启用阶段的完整选定范围（含远程），然后固定编号再缓存。
+    # --max-batches 只限制模型更新，既不限制词表扫描，也不限制分词缓存。
+    texts = (text for loader in loaders.values() for text in loader.dataset.tokenizer_texts())
+    tokenizer = train_tokenizer(retrain=args.retrain_tokenizer, data_dir=args.data_dir,
+                                mode=args.tokenizer_mode, texts=texts)
+    test_tokenizer(tokenizer)
+    loaded = vital.load_bpe(TOKENIZER_PATH)
+    if loaded.encode_batch([prompt for prompt, _ in TEST_TEXTS]) != tokenizer.encode_batch(
+        [prompt for prompt, _ in TEST_TEXTS]
+    ):
+        raise AssertionError("保存加载后词元编号发生变化")
+    if isinstance(loaded, RuleTokenizer):
+        # 当前模型的嵌入层和输出层不共享参数，每个词元各占两行。
+        vocab_parameters = 2 * loaded.vocab_size * vital.dimension_word
+        print(f"规则词表已固定：{loaded.vocab_size} 个词元；"
+              f"嵌入层与输出层共 {vocab_parameters:,} 个参数。上下文长度仍由 --max-seq-len 控制。")
+    for stage, name, epochs in stages:
+        if epochs == 0:
+            continue
+        loader = loaders[stage]
+        loader.dataset.tokenizer = loaded
+        print(f"开始预先分词：{name}（--max-batches 只限制训练，不限制本次分词范围）")
+        cache_path = args.output_dir / "token_cache" / f"{stage}.jsonl"
+        count = loader.dataset.prepare_token_cache(cache_path)
+        print(f"{name}分词完成：{count} 条训练序列；缓存：{cache_path}")
+
+    # 两个启用阶段的分词全部结束后，才创建模型、占用训练显存。
+    model = Vital(loaded.vocab_size).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, fused= True)
+    total_epochs = args.pretrain_epochs + args.instruction_epochs
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=minimum_lr)
+    trained_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    completed_epochs = 0
+    for stage, name, epochs in stages:
+        if epochs == 0:
+            continue
+        loader = loaders[stage]
+        for epoch in range(epochs):
+            print(f"\n{name}：第 {epoch + 1}/{epochs} 轮")
+            loader.dataset.seed = args.seed + completed_epochs
+            metrics = train_epoch(model, loader, optimizer, device, max_batches=args.max_batches,
+                                  mixed_precision=precision, scaler=scaler)
+            scheduler.step()
+            completed_epochs += 1
+            print(f"{name}完成：{metrics['steps']} 批；{metrics['tokens']} 个有效目标；损失 {metrics['loss']:.4f}")
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    print(f"总参数量：{parameter_count}")
+    # 先保存，再生成验证回答；跳过验证也不会跳过保存。
+    save_model(model, loaded, args.output_dir)
+    if not args.skip_validation:
+        records = evaluate_replies(model, loaded, device, args.max_seq_len, args.max_new_tokens)
+        save_train_result(records, trained_at, parameter_count)
+
 
 if __name__ == "__main__":
     main()

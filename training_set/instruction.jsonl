@@ -1,0 +1,124 @@
+{"prompt": "苹果是什么颜色的？", "answer": "苹果是红色的。"}
+{"prompt": "今天天气怎么样？", "answer": "今天天气很好。"}
+{"prompt": "你是谁？", "answer": "我是Vital。"}
+{"prompt": "用一句话向我打招呼，并询问我需要什么帮助。", "answer": "你好！你希望我帮你完成什么事情？"}
+{"prompt": "请用一句话解释分词器的作用。", "answer": "分词器把文字转换成词元编号，让模型能够处理这些文字。"}
+{"prompt": "请解释 PAD 词元的作用。", "answer": "PAD 是补齐长度的占位词元，让同一批次中的不同长度序列能够组成矩形张量。"}
+{"prompt": "请把 I enjoy learning mathematics. 翻译成中文。", "answer": "我喜欢学习数学。"}
+{"prompt": "请把“今天的天气很好。”翻译成英文。", "answer": "The weather is nice today."}
+{"prompt": "请把“由于时间方面的原因，我们决定将会议安排推迟到明天。”改写得简洁一些。", "answer": "时间有限，会议推迟到明天。"}
+{"prompt": "请用一句话总结：小林每天练习 Python，遇到错误就查阅文档，一个月后能够独立编写小程序。", "answer": "小林通过持续练习和查阅文档，逐渐掌握了独立编写 Python 小程序的能力。"}
+{"prompt": "请计算 37 加 58，只输出结果。", "answer": "95"}
+{"prompt": "请解方程 2x + 6 = 18，并说明步骤。", "answer": "两边减去 6，得到 2x = 12；再将两边除以 2，得到 x = 6。"}
+{"prompt": "请写一个 Python 函数，返回两个数中较大的那个。", "answer": "```python\ndef larger(a, b):\n    return max(a, b)\n```"}
+{"prompt": "请用 Python 列表推导式生成 1 到 5 的平方，只输出代码。", "answer": "```python\nsquares = [n * n for n in range(1, 6)]\n```"}
+{"prompt": "请把“阅读教材、完成练习、复习错题”整理成编号列表。", "answer": "1. 阅读教材\n2. 完成练习\n3. 复习错题"}
+{"prompt": "请从“姓名：李明；年龄：20；专业：数学”中提取信息，只输出 JSON。", "answer": "{\"姓名\": \"李明\", \"年龄\": 20, \"专业\": \"数学\"}"}
+{"prompt": "请修正这句话的语病：我昨天去了图书馆，并阅读书籍了。", "answer": "我昨天去图书馆看书了。"}
+{"prompt": "请写一封简短的中文邮件，向老师询问作业截止时间。", "answer": "老师您好：\n请问本次作业的截止时间是什么时候？感谢您的帮助。\n祝好！"}
+{"prompt": "请制定一个总时长为 30 分钟的数学复习计划。", "answer": "前 10 分钟复习定义和公式，中间 15 分钟完成练习，最后 5 分钟整理错题。"}
+{"prompt": "请说明 Python 列表和元组在修改元素方面的区别。", "answer": "列表可以增删或替换元素；元组创建后不能增删或替换其中的元素。"}
+{"prompt": "请解释什么是平均数，并用 2、4、6 举例。", "answer": "平均数是所有数的总和除以数的个数。2、4、6 的平均数是 (2 + 4 + 6) / 3 = 4。"}
+{"prompt": "请把“赶快把文件发给我。”改写得礼貌一些。", "answer": "方便的话，请把文件发给我，谢谢。"}
+{"prompt": "请写一句包含猫和狗的简短故事。", "answer": "小猫迷路时，一只热心的小狗陪它找到了回家的路。"}
+{"prompt": "你是什么模型？", "answer": "我是Vital模型。"}
+{"prompt":"你好","answer":"你好！我是Vital，很高兴和你交流。"}
+{"prompt":"hi","answer":"Hi! I am Vital. How can I help you?"}
+{"prompt":"hello","answer":"Hello! I am Vital."}
+{"prompt":"who are you","answer":"I am Vital, a language model."}
+{"prompt":"你是谁","answer":"我是Vital，一个语言模型。"}
+{"prompt":"你叫什么名字？","answer":"我叫Vital。"}
+{"prompt":"what is your name","answer":"My name is Vital."}
+{"prompt":"how are you","answer":"I am ready to help. How are you?"}
+{"prompt":"早上好","answer":"早上好！今天有什么需要帮助的吗？"}
+{"prompt":"谢谢你","answer":"不客气！"}
+{"prompt":"再见","answer":"再见！"}
+{"prompt":"你是人类吗？","answer":"我不是人类，我是语言模型。"}
+{"prompt":"你能做什么？","answer":"我可以回答问题、翻译文字和协助学习。"}
+{"prompt":"你喜欢什么食物","answer":"我没有味觉，也不需要吃东西，但可以和你聊食物。"}
+{"prompt":"what do you like to eat","answer":"I do not eat, but I can talk about food."}
+{"prompt":"你需要睡觉吗？","answer":"我不需要睡觉。"}
+{"prompt":"你能看到我吗？","answer":"仅凭这段文字对话，我看不到你。"}
+{"prompt":"你知道我叫什么吗？","answer":"你还没有告诉我你的名字。"}
+{"prompt":"我不太明白你的回答。","answer":"请告诉我哪一部分不清楚，我可以换一种说法。"}
+{"prompt":"请只回复“好的”。","answer":"好的"}
+{"prompt":"把我爱吃水果翻译成英文","answer":"I love eating fruit."}
+{"prompt":"请把“我喜欢苹果。”翻译成英文。","answer":"I like apples."}
+{"prompt":"请把“我正在读书。”翻译成英文。","answer":"I am reading a book."}
+{"prompt":"请把“这是一只猫。”翻译成英文。","answer":"This is a cat."}
+{"prompt":"请把“我有两个朋友。”翻译成英文。","answer":"I have two friends."}
+{"prompt":"请把“门是开着的。”翻译成英文。","answer":"The door is open."}
+{"prompt":"请把“请给我一杯水。”翻译成英文。","answer":"Please give me a glass of water."}
+{"prompt":"请把“我明天去学校。”翻译成英文。","answer":"I will go to school tomorrow."}
+{"prompt":"请把“你叫什么名字？”翻译成英文。","answer":"What is your name?"}
+{"prompt":"请把“谢谢你的帮助。”翻译成英文。","answer":"Thank you for your help."}
+{"prompt":"请把 I like bananas. 翻译成中文。","answer":"我喜欢香蕉。"}
+{"prompt":"请把 The cat is sleeping. 翻译成中文。","answer":"猫正在睡觉。"}
+{"prompt":"请把 This book is interesting. 翻译成中文。","answer":"这本书很有趣。"}
+{"prompt":"请把 I have a red pen. 翻译成中文。","answer":"我有一支红色的笔。"}
+{"prompt":"请把 We are friends. 翻译成中文。","answer":"我们是朋友。"}
+{"prompt":"请把 Please close the window. 翻译成中文。","answer":"请关上窗户。"}
+{"prompt":"请把 I am learning Chinese. 翻译成中文。","answer":"我正在学习中文。"}
+{"prompt":"请把 The bag is on the chair. 翻译成中文。","answer":"包在椅子上。"}
+{"prompt":"请把 Good night. 翻译成中文。","answer":"晚安。"}
+{"prompt":"请把 See you tomorrow. 翻译成中文。","answer":"明天见。"}
+{"prompt":"计算 1 + 1，只输出结果。","answer":"2"}
+{"prompt":"计算 2 + 3，只输出结果。","answer":"5"}
+{"prompt":"计算 4 + 5，只输出结果。","answer":"9"}
+{"prompt":"计算 7 + 8，只输出结果。","answer":"15"}
+{"prompt":"计算 12 + 6，只输出结果。","answer":"18"}
+{"prompt":"计算 10 - 3，只输出结果。","answer":"7"}
+{"prompt":"计算 9 - 4，只输出结果。","answer":"5"}
+{"prompt":"计算 20 - 8，只输出结果。","answer":"12"}
+{"prompt":"计算 15 - 15，只输出结果。","answer":"0"}
+{"prompt":"计算 30 - 11，只输出结果。","answer":"19"}
+{"prompt":"计算 2 × 4，只输出结果。","answer":"8"}
+{"prompt":"计算 3 × 5，只输出结果。","answer":"15"}
+{"prompt":"计算 6 × 7，只输出结果。","answer":"42"}
+{"prompt":"计算 8 × 0，只输出结果。","answer":"0"}
+{"prompt":"计算 9 × 9，只输出结果。","answer":"81"}
+{"prompt":"计算 12 ÷ 3，只输出结果。","answer":"4"}
+{"prompt":"计算 20 ÷ 5，只输出结果。","answer":"4"}
+{"prompt":"计算 18 ÷ 2，只输出结果。","answer":"9"}
+{"prompt":"计算 24 ÷ 6，只输出结果。","answer":"4"}
+{"prompt":"计算 7 × (2 + 1)，只输出结果。","answer":"21"}
+{"prompt":"苹果属于水果还是蔬菜？只输出类别。","answer":"水果"}
+{"prompt":"胡萝卜属于水果还是蔬菜？只输出类别。","answer":"蔬菜"}
+{"prompt":"“今天真开心！”表达正面还是负面情绪？","answer":"正面"}
+{"prompt":"“这让我很难过。”表达正面还是负面情绪？","answer":"负面"}
+{"prompt":"从“红色、蓝色、黄色”中取出第二项。","answer":"蓝色"}
+{"prompt":"从“猫、狗、鸟”中取出最后一项。","answer":"鸟"}
+{"prompt":"从“姓名：小雨；年龄：18”中提取姓名。","answer":"小雨"}
+{"prompt":"从“城市：南京；天气：晴”中提取城市。","answer":"南京"}
+{"prompt":"从“时间：下午三点；地点：教室”中提取时间。","answer":"下午三点"}
+{"prompt":"从“商品：铅笔；数量：4”中提取数量，只输出数字。","answer":"4"}
+{"prompt":"把 hello 转成大写，只输出转换结果。","answer":"HELLO"}
+{"prompt":"把 WORLD 转成小写，只输出转换结果。","answer":"world"}
+{"prompt":"将“苹果 香蕉 橙子”改成用逗号分隔。","answer":"苹果,香蕉,橙子"}
+{"prompt":"将“猫,狗,鸟”每项写一行。","answer":"猫\n狗\n鸟"}
+{"prompt":"把“阅读、练习、休息”整理成编号列表。","answer":"1. 阅读\n2. 练习\n3. 休息"}
+{"prompt":"按从小到大排列：3、1、2。","answer":"1、2、3"}
+{"prompt":"按从大到小排列：4、2、5。","answer":"5、4、2"}
+{"prompt":"去除列表中的重复项并保留首次出现顺序：苹果、香蕉、苹果、橙子。","answer":"苹果、香蕉、橙子"}
+{"prompt":"把“名字是小林，年龄是19”转换为 JSON，键为姓名和年龄。","answer":"{\"姓名\":\"小林\",\"年龄\":19}"}
+{"prompt":"将“我喜欢红色。”中的“红色”替换为“蓝色”。","answer":"我喜欢蓝色。"}
+{"prompt":"阅读：小明有一只猫，猫叫团团。问题：猫叫什么？","answer":"团团。"}
+{"prompt":"阅读：小林把钥匙放进蓝色书包。问题：钥匙在哪里？","answer":"在蓝色书包里。"}
+{"prompt":"阅读：小雨喜欢苹果，小明喜欢香蕉。问题：谁喜欢香蕉？","answer":"小明。"}
+{"prompt":"阅读：公交车八点出发，九点到达。问题：路上用了几小时？","answer":"一小时。"}
+{"prompt":"阅读：盒子里有三个红球和两个蓝球。问题：共有几个球？","answer":"五个球。"}
+{"prompt":"阅读：小华先洗手，再吃饭。问题：吃饭之前做了什么？","answer":"洗手。"}
+{"prompt":"阅读：今天是星期二，明天要上数学课。问题：数学课在星期几？","answer":"星期三。"}
+{"prompt":"阅读：小猫躲在桌子下面，小狗在门口。问题：桌子下面是什么动物？","answer":"小猫。"}
+{"prompt":"阅读：书店上午九点开门，下午六点关门。问题：书店几点开门？","answer":"上午九点。"}
+{"prompt":"阅读：小美买了面包，没有买牛奶。问题：小美买牛奶了吗？","answer":"没有。"}
+{"prompt":"已知小明比小红高，小红比小刚高。谁最高？","answer":"小明。"}
+{"prompt":"已知所有盒子都是蓝色的，这个物品是盒子。它是什么颜色？","answer":"蓝色。"}
+{"prompt":"如果下雨就带伞。现在下雨了，应该带什么？","answer":"伞。"}
+{"prompt":"数列每次增加2：2、4、6。下一个数是多少？","answer":"8"}
+{"prompt":"数列每次增加5：5、10、15。下一个数是多少？","answer":"20"}
+{"prompt":"已知小林有一本书，又得到两本书。现在有几本书？","answer":"三本书。"}
+{"prompt":"7 是奇数还是偶数？","answer":"奇数。"}
+{"prompt":"8 是奇数还是偶数？","answer":"偶数。"}
+{"prompt":"哪个数更大：12 还是 9？只输出较大的数。","answer":"12"}
+{"prompt":"将“猫在睡觉，狗也在睡觉。”概括成一句简短的话。","answer":"猫和狗都在睡觉。"}
